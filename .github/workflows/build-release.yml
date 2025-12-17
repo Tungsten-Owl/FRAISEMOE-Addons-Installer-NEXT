@@ -3,44 +3,35 @@ name: Build and Release
 on:
   push:
     tags:
-      - '*'  # 监听所有 tag
+      - '*'  # 监听所有 tag，后续用脚本过滤纯数字版本
 
 jobs:
   build-windows:
     runs-on: windows-latest
 
-    if: |
-      contains(github.ref, 'refs/tags/') &&
-      runner.os == 'Windows'
-
     steps:
-      - name: Get tag name
+      - name: Get and validate version tag
         id: get_tag
+        shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          echo "Raw tag: $tag"
-          # 使用 PowerShell 正则判断是否为纯数字+点:(防呆
+          Write-Host "Tag detected: $tag"
           if ($tag -match '^\d+(\.\d+)*$') {
-            echo "VALID_TAG=true" >> $env:GITHUB_OUTPUT
-            echo "TAG_VERSION=$tag" >> $env:GITHUB_OUTPUT
-            Write-Host "Valid version tag: $tag"
+            echo "VALID=true" >> $env:GITHUB_OUTPUT
+            echo "VERSION=$tag" >> $env:GITHUB_OUTPUT
+            Write-Host "✅ Valid numeric version tag"
           } else {
-            echo "VALID_TAG=false" >> $env:GITHUB_OUTPUT
-            Write-Host "Invalid tag format (must be like 1.4.2.1): $tag"
+            echo "VALID=false" >> $env:GITHUB_OUTPUT
+            Write-Host "❌ Skipping: not a pure numeric version (e.g., 1.4.3)"
+            exit 0
           }
 
-      - name: Cancel if invalid tag
-        if: steps.get_tag.outputs.VALID_TAG != 'true'
-        run: |
-          Write-Host "Skipping build: not a pure numeric version tag."
-          exit 0  # 或直接结束 job（不会报错）
-
       - name: Checkout code
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+        if: steps.get_tag.outputs.VALID == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+        if: steps.get_tag.outputs.VALID == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -48,14 +39,14 @@ jobs:
           cache-dependency-path: 'source/requirements.txt'
 
       - name: Install dependencies
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+        if: steps.get_tag.outputs.VALID == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r source/requirements.txt
           pip install pyinstaller
 
       - name: Download and setup UPX
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+        if: steps.get_tag.outputs.VALID == 'true'
         shell: pwsh
         run: |
           $url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
@@ -65,47 +56,47 @@ jobs:
           echo "${{ runner.temp }}/upx/upx-4.2.4-win64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify icon file exists
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+        if: steps.get_tag.outputs.VALID == 'true'
         run: |
           cd source
           $icon = "assets/images/ICO/icon.ico"
           if (Test-Path $icon) {
-            Write-Host "Icon found: $icon"
+            Write-Host "✅ Icon found"
           } else {
-            Write-Host "Icon NOT found!"
+            Write-Host "❌ Icon missing!"
             exit 1
           }
 
       - name: Build executable with PyInstaller
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+        if: steps.get_tag.outputs.VALID == 'true'
         run: |
           cd source
           pyinstaller --clean --noconfirm build.spec
 
-      - name: Verify output EXE exists and show size
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+      - name: Verify output EXE and show size
+        if: steps.get_tag.outputs.VALID == 'true'
         run: |
           $exe = "source/dist/FRAISEMOE_Addons_Installer_NEXT.exe"
           if (Test-Path $exe) {
-            $sizeMB = [math]::Round((Get-Item $exe).Length / 1MB, 2)
-            Write-Host "Build succeeded! Size: $sizeMB MB"
+            $size = [math]::Round((Get-Item $exe).Length / 1MB, 2)
+            Write-Host "✅ Build successful! Size: $size MB"
           } else {
-            Write-Host "EXE not found!"
+            Write-Host "❌ EXE not found!"
             exit 1
           }
 
-      - name: Upload as workflow artifact
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+      - name: Upload artifact
+        if: steps.get_tag.outputs.VALID == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: FRAISEMOE-Installer-${{ steps.get_tag.outputs.TAG_VERSION }}
+          name: FRAISEMOE-Installer-${{ steps.get_tag.outputs.VERSION }}
           path: source/dist/FRAISEMOE_Addons_Installer_NEXT.exe
 
       - name: Create GitHub Release
-        if: steps.get_tag.outputs.VALID_TAG == 'true'
+        if: steps.get_tag.outputs.VALID == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          name: Release ${{ steps.get_tag.outputs.TAG_VERSION }}
+          name: Release ${{ steps.get_tag.outputs.VERSION }}
           files: source/dist/FRAISEMOE_Addons_Installer_NEXT.exe
           draft: false
           prerelease: false
